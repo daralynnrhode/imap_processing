@@ -1,6 +1,7 @@
 """Module for constants and useful shared classes used in Ultra."""
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -52,13 +53,28 @@ class UltraConstants:
     DF: float = 3.39  # Distance from slit to foil [mm]
 
     # Derived constants
-    DMIN: float = (
+    DMIN_PH_CTOF: float = (
         Z_DS - (2**0.5) * DF
     )  # Minimum distance between front and back detectors [mm]
-    DMIN_SSD_CTOF: float = (DMIN**2) / (
-        DMIN - Z_DSTOP
+    DMIN_SSD_CTOF: float = (DMIN_PH_CTOF**2) / (
+        DMIN_PH_CTOF - Z_DSTOP
     )  # SSD-specific correction to DMIN [mm]
 
     # Conversion factors
-    KEV_J = 1.602180000000000e-16  # 1.6021766339999e-16 # keV to joules
+    KEV_J = 1.602177e-16  # keV to joules
+    J_KEV = 1 / KEV_J  # joules to keV
     MASS_H = 1.6735575e-27  # Mass of a hydrogen atom in kilograms.
+
+    # Energy bin constants
+    ALPHA = 0.2  # deltaE/E
+    ENERGY_START = 3.385  # energy start for the Ultra grids
+    N_BINS = 23  # number of energy bins
+
+    # Constants for species determination based on ctof range.
+    CTOF_SPECIES_MIN = 50
+    CTOF_SPECIES_MAX = 200
+
+    # TODO: this is a temporary place for this.
+    # Thresholds for culling based on counts.
+    CULLING_ENERGY_BIN_EDGES: ClassVar[list] = [-1e5, 0, 10, 20, 1e5]
+    COUNT_RATES_THRESHOLDS: ClassVar[list] = [0, 100, 100, 100]

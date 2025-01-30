@@ -4,7 +4,7 @@ import xarray as xr
 
 from imap_processing import imap_module_directory
 from imap_processing.cdf.utils import write_cdf
-from imap_processing.spice.time import met_to_j2000ns
+from imap_processing.spice.time import met_to_ttj2000ns
 from imap_processing.swapi.l1.swapi_l1 import (
     SWAPIAPID,
     decompress_count,
@@ -39,7 +39,7 @@ def test_filter_good_data():
     total_sweeps = 3
     ds = xr.Dataset(
         {
-            "plan_id_science": xr.DataArray(np.full((total_sweeps * 12), 1)),
+            "plan_id": xr.DataArray(np.full((total_sweeps * 12), 1)),
             "sweep_table": xr.DataArray(np.repeat(np.arange(total_sweeps), 12)),
             "mode": xr.DataArray(np.full((total_sweeps * 12), SWAPIMODE.HVSCI.value)),
         },
@@ -69,9 +69,9 @@ def test_filter_good_data():
     expected = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     np.testing.assert_array_equal(filter_good_data(ds), expected)
 
-    # Check for bad plan_id_science data.
+    # Check for bad plan_id data.
     ds["sweep_table"] = xr.DataArray(np.repeat(np.arange(total_sweeps), 12))
-    ds["plan_id_science"][24 : total_sweeps * 12] = np.arange(0, 12)
+    ds["plan_id"][24 : total_sweeps * 12] = np.arange(0, 12)
     np.testing.assert_array_equal(filter_good_data(ds), np.arange(0, 24))
 
 
@@ -91,7 +91,7 @@ def test_find_sweep_starts():
     sequence_number = time % 12
     ds = xr.Dataset(
         {"seq_number": sequence_number, "shcoarse": np.arange(1, 27, 1)},
-        coords={"epoch": met_to_j2000ns(time)},
+        coords={"epoch": met_to_ttj2000ns(time)},
     )
 
     start_indices = find_sweep_starts(ds)
@@ -114,7 +114,7 @@ def test_get_full_indices():
     sequence_number = time % 12
     ds = xr.Dataset(
         {"seq_number": sequence_number, "shcoarse": np.arange(1, 27, 1)},
-        coords={"epoch": met_to_j2000ns(time)},
+        coords={"epoch": met_to_ttj2000ns(time)},
     )
 
     sweep_indices = get_indices_of_full_sweep(ds)
@@ -157,7 +157,7 @@ def test_process_swapi_science(decom_test_data):
     )
 
     # make PLAN_ID data incorrect. Now processed data should have less sweeps
-    ds_data["plan_id_science"].data[:24] = np.arange(24)
+    ds_data["plan_id"].data[:24] = np.arange(24)
     processed_data = process_swapi_science(
         ds_data, decom_test_data[SWAPIAPID.SWP_HK], data_version="001"
     )
@@ -176,17 +176,18 @@ def test_process_swapi_science(decom_test_data):
 def test_swapi_l1_cdf(swapi_l0_test_data_path):
     """Test housekeeping processing and CDF file creation"""
     test_packet_file = swapi_l0_test_data_path / "imap_swapi_l0_raw_20240924_v001.pkts"
-    processed_data = swapi_l1(test_packet_file, data_version="v001")
+    processed_data = swapi_l1([test_packet_file], data_version="v001")
+    # hk cdf file
+    hk_cdf_filename = "imap_swapi_l1_hk_20240924_v001.cdf"
+    # TODO: how to add ignore ISTP checks for HK data to cli.py
+    hk_cdf_path = write_cdf(processed_data[0])
+    assert hk_cdf_path.name == hk_cdf_filename
+
+    processed_data = swapi_l1([test_packet_file, hk_cdf_path], data_version="v001")
 
     assert processed_data[0].attrs["Apid"] == f"{SWAPIAPID.SWP_SCI}"
 
     # Test CDF File
     cdf_filename = "imap_swapi_l1_sci_20240924_v001.cdf"
     cdf_path = write_cdf(processed_data[0])
-    assert cdf_path.name == cdf_filename
-
-    # hk cdf file
-    cdf_filename = "imap_swapi_l1_hk_20240924_v001.cdf"
-    # Ignore ISTP checks for HK data
-    cdf_path = write_cdf(processed_data[1], istp=False)
     assert cdf_path.name == cdf_filename

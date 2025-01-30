@@ -1,179 +1,208 @@
 """IMAP-HIT L1B data processing."""
 
 import logging
-from dataclasses import fields
 
-import numpy as np
 import xarray as xr
 
 from imap_processing.cdf.imap_cdf_manager import ImapCdfAttributes
-from imap_processing.hit.l0.data_classes.housekeeping import Housekeeping
-from imap_processing.spice.time import met_to_j2000ns
+from imap_processing.hit.hit_utils import (
+    HitAPID,
+    get_attribute_manager,
+    get_datasets_by_apid,
+    process_housekeeping_data,
+)
 
 logger = logging.getLogger(__name__)
 
 # TODO review logging levels to use (debug vs. info)
 
 
-def hit_l1b(l1a_dataset: xr.Dataset, data_version: str) -> list[xr.Dataset]:
+def hit_l1b(dependencies: dict, data_version: str) -> list[xr.Dataset]:
     """
     Will process HIT data to L1B.
 
+    Processes dependencies needed to create L1B data products.
+
     Parameters
     ----------
-    l1a_dataset : xarray.Dataset
-        L1A data.
+    dependencies : dict
+        Dictionary of dependencies that are L1A xarray datasets
+        for science data and a file path string to an L0 file
+        for housekeeping data.
     data_version : str
         Version of the data product being created.
 
     Returns
     -------
-    cdf_filepaths : xarray.Dataset
-        L1B processed data.
+    processed_data : list[xarray.Dataset]
+        List of four L1B datasets.
     """
-    # create the attribute manager for this data level
-    attr_mgr = ImapCdfAttributes()
-    attr_mgr.add_instrument_global_attrs(instrument="hit")
-    attr_mgr.add_instrument_variable_attrs(instrument="hit", level="l1b")
-    attr_mgr.add_global_attribute("Data_version", data_version)
+    # Create the attribute manager for this data level
+    attr_mgr = get_attribute_manager(data_version, "l1b")
 
-    # TODO: Check for type of L1A dataset and determine what L1B products to make
-    #   Need more info from instrument teams. Work with housekeeping data for now
-    logical_source = "imap_hit_l1b_hk"
+    # Create L1B datasets
+    l1b_datasets: list = []
+    if "imap_hit_l0_raw" in dependencies:
+        # Unpack ccsds file to xarray datasets
+        packet_file = dependencies["imap_hit_l0_raw"]
+        datasets_by_apid = get_datasets_by_apid(packet_file, derived=True)
+        # Process housekeeping to L1B.
+        l1b_datasets.append(
+            process_housekeeping_data(
+                datasets_by_apid[HitAPID.HIT_HSKP], attr_mgr, "imap_hit_l1b_hk"
+            )
+        )
+        logger.info("HIT L1B housekeeping dataset created")
+    if "imap_hit_l1a_count-rates" in dependencies:
+        # Process science data to L1B datasets
+        l1a_counts_dataset = dependencies["imap_hit_l1a_count-rates"]
+        l1b_datasets.extend(process_science_data(l1a_counts_dataset, attr_mgr))
+        logger.info("HIT L1B science datasets created")
 
-    # Create datasets
-    datasets = []
-    if "_hk" in logical_source:
-        dataset = create_hk_dataset(attr_mgr)
-        datasets.append(dataset)
-    elif "_sci" in logical_source:
-        # process science data. placeholder for future code
-        pass
-
-    return datasets
+    return l1b_datasets
 
 
-# TODO: This is going to work differently when we have sample data
-def create_hk_dataset(attr_mgr: ImapCdfAttributes) -> xr.Dataset:
+def process_science_data(
+    raw_counts_dataset: xr.Dataset, attr_mgr: ImapCdfAttributes
+) -> list[xr.Dataset]:
     """
-    Create a housekeeping dataset.
+    Will create L1B science datasets for CDF products.
+
+    Process L1A raw counts data to create L1B science data for
+    CDF creation. This function will create three L1B science
+    datasets: standard rates, summed rates, and sectored rates.
+    It will also update dataset attributes, coordinates and
+    data variable dimensions according to specifications in
+    a CDF yaml file.
 
     Parameters
     ----------
-    attr_mgr : ImapCdfAttributes
-        Attribute manager used to get the data product field's attributes.
+    raw_counts_dataset : xr.Dataset
+        The L1A counts dataset.
+    attr_mgr : AttributeManager
+        The attribute manager for the L1B data level.
 
     Returns
     -------
-    hk_dataset : xarray.dataset
-        Dataset with all data product fields in xarray.DataArray.
+    dataset : list
+        The processed L1B science datasets as xarray datasets.
     """
-    logger.info("Creating datasets for HIT L1B data")
+    logger.info("Creating HIT L1B science datasets")
 
-    # TODO: TEMPORARY. Need to update to use the L1B data class once that exists.
-    #  Using l1a housekeeping data class for now since l1b housekeeping has the
-    #  same data fields
-    data_fields = fields(Housekeeping)
+    # Logical sources for the three L1B science products.
+    # TODO: add logical sources for other l1b products once processing functions
+    #  are written. "imap_hit_l1b_summed-rates", "imap_hit_l1b_sectored-rates"
+    logical_sources = ["imap_hit_l1b_standard-rates"]
 
-    # TODO define keys to skip. This will change later.
-    skip_keys = [
-        "shcoarse",
-        "ground_sw_version",
-        "packet_file_name",
-        "ccsds_header",
-        "leak_i_raw",
+    # TODO: Write functions to create the following datasets
+    #  Process summed rates dataset
+    #  Process sectored rates dataset
+
+    # Create a standard rates dataset
+    standard_rates_dataset = process_standard_rates_data(raw_counts_dataset)
+
+    l1b_science_datasets = []
+    # Update attributes and dimensions
+    for dataset, logical_source in zip([standard_rates_dataset], logical_sources):
+        dataset.attrs = attr_mgr.get_global_attributes(logical_source)
+
+        # TODO: Add CDF attributes to yaml once they're defined for L1B science data
+        # Assign attributes and dimensions to each data array in the Dataset
+        for field in dataset.data_vars.keys():
+            try:
+                # Create a dict of dimensions using the DEPEND_I keys in the
+                # attributes
+                dims = {
+                    key: value
+                    for key, value in attr_mgr.get_variable_attributes(field).items()
+                    if "DEPEND" in key
+                }
+                dataset[field].attrs = attr_mgr.get_variable_attributes(field)
+                dataset[field].assign_coords(dims)
+            except KeyError:
+                print(f"Field {field} not found in attribute manager.")
+                logger.warning(f"Field {field} not found in attribute manager.")
+
+        # Skip schema check for epoch to prevent attr_mgr from adding the
+        # DEPEND_0 attribute which isn't required for epoch
+        dataset.epoch.attrs = attr_mgr.get_variable_attributes(
+            "epoch", check_schema=False
+        )
+
+        l1b_science_datasets.append(dataset)
+
+        logger.info(f"HIT L1B dataset created for {logical_source}")
+
+    return l1b_science_datasets
+
+
+def process_standard_rates_data(raw_counts_dataset: xr.Dataset) -> xr.Dataset:
+    """
+    Will process L1B standard rates data from raw L1A counts data.
+
+    Parameters
+    ----------
+    raw_counts_dataset : xr.Dataset
+        The L1A counts dataset.
+
+    Returns
+    -------
+    xr.Dataset
+        The processed L1B standard rates dataset.
+    """
+    # Create a new dataset to store the L1B standard rates
+    l1b_standard_rates_dataset = xr.Dataset()
+
+    # Add required coordinates from the raw_counts_dataset
+    coords = [
+        "epoch",
+        "gain",
+        "sngrates_index",
+        "coinrates_index",
+        "pbufrates_index",
+        "l2fgrates_index",
+        "l2bgrates_index",
+        "l3fgrates_index",
+        "l3bgrates_index",
+        "penfgrates_index",
+        "penbgrates_index",
+        "ialirtrates_index",
+    ]
+    l1b_standard_rates_dataset = l1b_standard_rates_dataset.assign_coords(
+        {coord: raw_counts_dataset.coords[coord] for coord in coords}
+    )
+
+    # Add dynamic threshold field
+    l1b_standard_rates_dataset["dynamic_threshold_state"] = raw_counts_dataset[
+        "hdr_dynamic_threshold_state"
     ]
 
-    logical_source = "imap_hit_l1b_hk"
+    # Define fields from the raw_counts_dataset to calculate standard rates from
+    standard_rate_fields = [
+        "sngrates",
+        "coinrates",
+        "pbufrates",
+        "l2fgrates",
+        "l2bgrates",
+        "l3fgrates",
+        "l3bgrates",
+        "penfgrates",
+        "penbgrates",
+        "ialirtrates",
+        "l4fgrates",
+        "l4bgrates",
+    ]
 
-    # Create fake data for now
+    # Calculate livetime from the livetime counter
+    livetime = raw_counts_dataset["livetime"] / 270
 
-    # Convert integers into datetime64[s]
-    epoch_converted_time = met_to_j2000ns([0, 1, 2])
+    # Calculate standard rates by dividing the raw counts by livetime for
+    # data variables with names that contain a substring from a defined
+    # list of field names.
+    for var in raw_counts_dataset.data_vars:
+        if var != "livetime" and any(
+            base_var in var for base_var in standard_rate_fields
+        ):
+            l1b_standard_rates_dataset[var] = raw_counts_dataset[var] / livetime
 
-    # Shape for dims
-    n_epoch = 3
-    n_channels = 64
-
-    # Create xarray data arrays for dependencies
-    epoch_time = xr.DataArray(
-        data=epoch_converted_time,
-        name="epoch",
-        dims=["epoch"],
-        attrs=attr_mgr.get_variable_attributes("epoch"),
-    )
-
-    adc_channels = xr.DataArray(
-        np.arange(n_channels, dtype=np.uint16),
-        name="adc_channels",
-        dims=["adc_channels"],
-        attrs=attr_mgr.get_variable_attributes("adc_channels"),
-    )
-
-    # Create xarray dataset
-    hk_dataset = xr.Dataset(
-        coords={"epoch": epoch_time, "adc_channels": adc_channels},
-        attrs=attr_mgr.get_global_attributes(logical_source),
-    )
-
-    # Create xarray data array for each data field
-    for data_field in data_fields:
-        field = data_field.name.lower()
-        if field not in skip_keys:
-            # Create a list of all the dimensions using the DEPEND_I keys in the
-            # attributes
-            dims = [
-                value
-                for key, value in attr_mgr.get_variable_attributes(field).items()
-                if "DEPEND" in key
-            ]
-
-            # TODO: This is temporary.
-            #  The data will be set in the data class when that's created
-            if field == "leak_i":
-                # 2D array - needs two dims
-                hk_dataset[field] = xr.DataArray(
-                    np.ones((n_epoch, n_channels), dtype=np.uint16),
-                    dims=dims,
-                    attrs=attr_mgr.get_variable_attributes(field),
-                )
-            elif field in [
-                "preamp_l234a",
-                "preamp_l1a",
-                "preamp_l1b",
-                "preamp_l234b",
-                "temp0",
-                "temp1",
-                "temp2",
-                "temp3",
-                "analog_temp",
-                "hvps_temp",
-                "idpu_temp",
-                "lvps_temp",
-                "ebox_3d4vd",
-                "ebox_5d1vd",
-                "ebox_p12va",
-                "ebox_m12va",
-                "ebox_p5d7va",
-                "ebox_m5d7va",
-                "ref_p5v",
-                "l1ab_bias",
-                "l2ab_bias",
-                "l34a_bias",
-                "l34b_bias",
-                "ebox_p2d0vd",
-            ]:
-                hk_dataset[field] = xr.DataArray(
-                    np.ones(3, dtype=np.float16),
-                    dims=dims,
-                    attrs=attr_mgr.get_variable_attributes(field),
-                )
-            else:
-                hk_dataset[field] = xr.DataArray(
-                    [1, 1, 1],
-                    dims=dims,
-                    attrs=attr_mgr.get_variable_attributes(field),
-                )
-
-    logger.info("HIT L1B datasets created")
-    return hk_dataset
+    return l1b_standard_rates_dataset

@@ -16,7 +16,7 @@ from imap_processing.ccsds.ccsds_data import CcsdsData
 from imap_processing.cdf.imap_cdf_manager import ImapCdfAttributes
 from imap_processing.mag.constants import DataMode
 from imap_processing.mag.l0.mag_l0_data import MagL0, Mode
-from imap_processing.spice.time import met_to_j2000ns
+from imap_processing.spice.time import met_to_ttj2000ns
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ def generate_dataset(
             )
         vector_data[index, :vector_len] = datapoint.VECTORS
 
-        shcoarse_data[index] = met_to_j2000ns(datapoint.SHCOARSE)
+        shcoarse_data[index] = met_to_ttj2000ns(datapoint.SHCOARSE)
         # Add remaining pieces to arrays
         for key, value in dataclasses.asdict(datapoint).items():
             if key not in ("ccsds_header", "VECTORS", "SHCOARSE"):
@@ -129,7 +129,9 @@ def generate_dataset(
         direction.astype(str),
         name="direction_label",
         dims=["direction_label"],
-        attrs=attribute_manager.get_variable_attributes("direction_label"),
+        attrs=attribute_manager.get_variable_attributes(
+            "direction_label", check_schema=False
+        ),
     )
 
     # TODO: Epoch here refers to the start of the sample. Confirm that this is
@@ -154,11 +156,10 @@ def generate_dataset(
         coords={
             "epoch": epoch_time,
             "direction": direction,
-            "direction_label": direction_label,
         },
         attrs=attribute_manager.get_global_attributes(logical_id),
     )
-
+    output["direction_label"] = direction_label
     output["raw_vectors"] = raw_vectors
 
     for key, value in support_data.items():

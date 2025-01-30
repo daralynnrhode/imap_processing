@@ -1,5 +1,6 @@
 """Processing function for Lo Science Data."""
 
+import logging
 from collections import namedtuple
 
 import numpy as np
@@ -11,6 +12,7 @@ from imap_processing.lo.l0.decompression_tables.decompression_tables import (
     CASE_DECODER,
     DE_BIT_SHIFT,
     FIXED_FIELD_BITS,
+    PACKET_FIELD_BITS,
     VARIABLE_FIELD_BITS,
 )
 from imap_processing.lo.l0.utils.bit_decompression import (
@@ -19,6 +21,9 @@ from imap_processing.lo.l0.utils.bit_decompression import (
     decompress_int,
 )
 from imap_processing.utils import convert_to_binary_string
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 HistPacking = namedtuple(
     "HistPacking",
@@ -174,30 +179,55 @@ def parse_events(dataset: xr.Dataset, attr_mgr: ImapCdfAttributes) -> xr.Dataset
     dataset : xr.Dataset
         Parsed and decompressed direct event data.
     """
-    # TODO: Add logging. Want to wait until I have a better understanding of how the
-    #  DEs spread across multiple packets will work first
-
+    logger.info("\n Parsing Lo L1A Direct Events")
     # Sum each count to get the total number of direct events for the pointing
-    num_de: int = np.sum(dataset["count"].values)
+    # parse the count and passes fields. These fields only occur once
+    # at the beginning of each packet group and are not part of the
+    # compressed direct event data
+    dataset["de_count"] = xr.DataArray(
+        [int(pkt[0:16], 2) for pkt in dataset["events"].values],
+        dims="epoch",
+        attrs=attr_mgr.get_variable_attributes("de_count"),
+    )
+    num_de: int = np.sum(dataset["de_count"].values)
 
-    de_fields = list(FIXED_FIELD_BITS._asdict().keys()) + list(
-        VARIABLE_FIELD_BITS._asdict().keys()
+    logger.info(f"Total number of direct events in this ASC: {num_de}")
+
+    de_fields = (
+        list(PACKET_FIELD_BITS._asdict().keys())
+        + list(FIXED_FIELD_BITS._asdict().keys())
+        + list(VARIABLE_FIELD_BITS._asdict().keys())
     )
     # Initialize all Direct Event fields with their fill value
     # L1A Direct event data will not be tied to an epoch
-    # data will use a direct event index for the pointing as its coordinate/dimension
+    # data will use a direct event index for the
+    # pointing as its coordinate/dimension
     for field in de_fields:
         dataset[field] = xr.DataArray(
             np.full(num_de, attr_mgr.get_variable_attributes(field)["FILLVAL"]),
             dims="direct_events",
+            attrs=attr_mgr.get_variable_attributes(field),
         )
+    dataset["passes"] = xr.DataArray(
+        np.full(
+            len(dataset["events"].values),
+            attr_mgr.get_variable_attributes("passes")["FILLVAL"],
+        ),
+        dims="epoch",
+        attrs=attr_mgr.get_variable_attributes("passes"),
+    )
 
     # The DE index for the entire pointing
     pointing_de = 0
     # for each direct event packet in the pointing
-    for pkt_idx, de_count in enumerate(dataset["count"].values):
+    for pkt_idx, de_count in enumerate(dataset["de_count"].values):
         # initialize the bit position for the packet
-        dataset.attrs["bit_pos"] = 0
+        # after the counts field
+        dataset.attrs["bit_pos"] = 16
+        # Parse the passes field for the packet
+        dataset["passes"].values[pkt_idx] = parse_de_bin(dataset, pkt_idx, 32)
+        dataset.attrs["bit_pos"] = dataset.attrs["bit_pos"] + 32
+
         # for each direct event in the packet
         for _ in range(de_count):
             # Parse the fixed fields for the direct event
@@ -209,6 +239,8 @@ def parse_events(dataset: xr.Dataset, attr_mgr: ImapCdfAttributes) -> xr.Dataset
 
             pointing_de += 1
 
+    del dataset.attrs["bit_pos"]
+    logger.info("\n Returning Lo L1A Direct Events Dataset")
     return dataset
 
 
@@ -314,9 +346,10 @@ def parse_de_bin(
         Parsed integer for the direct event field.
     """
     bit_pos = dataset.attrs["bit_pos"]
+
     parsed_int = (
         int(
-            dataset["data"].values[pkt_idx][bit_pos : bit_pos + bit_length],
+            dataset["events"].values[pkt_idx][bit_pos : bit_pos + bit_length],
             2,
         )
         << bit_shift
@@ -364,12 +397,11 @@ def combine_segmented_packets(dataset: xr.Dataset) -> xr.Dataset:
     valid_groups = find_valid_groups(seq_ctrs, seg_starts, seg_ends)
 
     # Combine the segmented packets into a single binary string
-    # Mark the segment splits with comma to identify padding bits
-    # when parsing the binary
     dataset["events"] = [
-        ",".join(dataset["data"].values[start : end + 1])
+        "".join(dataset["data"].values[start : end + 1])
         for start, end in zip(seg_starts, seg_ends)
     ]
+
     # drop any group of segmented packets that aren't sequential
     dataset["events"] = dataset["events"].values[valid_groups]
 
@@ -407,3 +439,46 @@ def find_valid_groups(
     ]
     valid_groups = [is_sequential(seq_ctrs) for seq_ctrs in grouped_seq_ctrs]
     return valid_groups
+
+
+def organize_spin_data(dataset: xr.Dataset) -> xr.Dataset:
+    """
+    Organize the spin data for Lo.
+
+    The spin data is spread across 28 fields. This function
+    combines each of those fields into 2D arrays for each
+    epoch and spin.
+
+    Parameters
+    ----------
+    dataset : xr.Dataset
+        Lo spin data from packets_to_dataset function.
+
+    Returns
+    -------
+    dataset : xr.Dataset
+        Updated dataset with the spin data organized.
+    """
+    # Get the spin data fields
+    spin_fields = [
+        "start_sec_spin",
+        "start_subsec_spin",
+        "esa_neg_dac_spin",
+        "esa_pos_dac_spin",
+        "valid_period_spin",
+        "valid_phase_spin",
+        "period_source_spin",
+    ]
+
+    for spin_field in spin_fields:
+        packet_fields = [f"{spin_field}_{i}" for i in range(1, 29)]
+        # Combine the spin data fields along a new dimension
+        combined_spin_data = xr.concat(
+            [dataset[field] for field in packet_fields], dim="spin"
+        )
+        # Assign the combined data back to the dataset
+        dataset[spin_field] = combined_spin_data.transpose()
+        # Drop the individual spin data fields
+        dataset = dataset.drop_vars(packet_fields)
+
+    return dataset

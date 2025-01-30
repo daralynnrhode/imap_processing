@@ -14,10 +14,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import requests
-import spiceypy as spice
+import spiceypy
 
 from imap_processing import imap_module_directory
-from imap_processing.spice.time import met_to_j2000ns
+from imap_processing.spice.time import met_to_ttj2000ns
 
 
 @pytest.fixture(autouse=True)
@@ -42,49 +42,53 @@ def _autoclear_spice():
     prevent the kernel pool from interfering with future tests. Option autouse
     ensures this is run after every test."""
     yield
-    spice.kclear()
+    spiceypy.kclear()
 
 
 @pytest.fixture(scope="session")
-def _download_de440s(spice_test_data_path):
-    """This fixture downloads the de440s.bsp kernel into the
-    tests/spice/test_data directory if it does not already exist there. The
-    fixture is not intended to be used directly. It is automatically added to
-    tests marked with "external_kernel" in the hook below."""
+def _download_external_kernels(spice_test_data_path):
+    """This fixture downloads externally-located kernels into the tests/spice/test_data
+    directory if they do not already exist there. The fixture is not intended to be
+    used directly. It is automatically added to tests marked with "external_kernel"
+    in the hook below."""
     logger = logging.getLogger(__name__)
-    kernel_url = (
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp"
-    )
-    kernel_name = kernel_url.split("/")[-1]
-    local_filepath = spice_test_data_path / kernel_name
+    kernel_urls = [
+        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp",
+        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
+        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_1962_240827_2124_combined.bpc",
+    ]
 
-    if local_filepath.exists():
-        return
-    allowed_attempts = 3
-    for attempt_number in range(allowed_attempts):
-        try:
-            with requests.get(kernel_url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                with open(local_filepath, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            logger.info("Cached kernel file to %s", local_filepath)
-            break
-        except requests.exceptions.RequestException as error:
-            logger.info(f"Request failed. {error}")
-            if attempt_number < allowed_attempts:
-                logger.info(
-                    f"Trying again, retries left "
-                    f"{allowed_attempts - attempt_number}, "
-                    f"Exception: {error}"
-                )
-                time.sleep(1)
-            else:
-                logger.error(
-                    f"Failed to download file after {allowed_attempts} "
-                    f"attempts, Final Error: {error}"
-                )
-                raise
+    for kernel_url in kernel_urls:
+        kernel_name = kernel_url.split("/")[-1]
+        local_filepath = spice_test_data_path / kernel_name
+
+        if local_filepath.exists():
+            continue
+        allowed_attempts = 3
+        for attempt_number in range(allowed_attempts):
+            try:
+                with requests.get(kernel_url, stream=True, timeout=30) as r:
+                    r.raise_for_status()
+                    with open(local_filepath, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                logger.info("Cached kernel file to %s", local_filepath)
+                continue
+            except requests.exceptions.RequestException as error:
+                logger.info(f"Request failed. {error}")
+                if attempt_number < allowed_attempts:
+                    logger.info(
+                        f"Trying again, retries left "
+                        f"{allowed_attempts - attempt_number}, "
+                        f"Exception: {error}"
+                    )
+                    time.sleep(1)
+                else:
+                    logger.error(
+                        f"Failed to download file {kernel_name} after "
+                        f"{allowed_attempts} attempts, Final Error: {error}"
+                    )
+                    raise
 
 
 def pytest_collection_modifyitems(items):
@@ -93,12 +97,12 @@ def pytest_collection_modifyitems(items):
     been collected. In this case, it automatically adds fixtures based on the
     following table:
 
-    +---------------------+---------------------+
-    | pytest mark         | fixture added       |
-    +=====================+=====================+
-    | external_kernel     | _download_de440s    |
-    | use_test_metakernel | use_test_metakernel |
-    +---------------------+---------------------+
+    +---------------------+----------------------------+
+    | pytest mark         | fixture added              |
+    +=====================+============================+
+    | external_kernel     | _download_external_kernels |
+    | use_test_metakernel | use_test_metakernel        |
+    +---------------------+----------------------------+
 
     Notes
     -----
@@ -108,7 +112,7 @@ def pytest_collection_modifyitems(items):
     """
     for item in items:
         if item.get_closest_marker("external_kernel") is not None:
-            item.fixturenames.append("_download_de440s")
+            item.fixturenames.append("_download_external_kernels")
         if item.get_closest_marker("use_test_metakernel") is not None:
             item.fixturenames.append("use_test_metakernel")
 
@@ -121,22 +125,22 @@ def spice_test_data_path(imap_tests_path):
 @pytest.fixture()
 def furnish_time_kernels(spice_test_data_path):
     """Furnishes (temporarily) the testing LSK and SCLK"""
-    spice.kclear()
+    spiceypy.kclear()
     test_lsk = spice_test_data_path / "naif0012.tls"
     test_sclk = spice_test_data_path / "imap_sclk_0000.tsc"
-    spice.furnsh(str(test_lsk))
-    spice.furnsh(str(test_sclk))
+    spiceypy.furnsh(str(test_lsk))
+    spiceypy.furnsh(str(test_sclk))
     yield test_lsk, test_sclk
-    spice.kclear()
+    spiceypy.kclear()
 
 
 @pytest.fixture()
 def furnish_sclk(spice_test_data_path):
     """Furnishes (temporarily) the SCLK for JPSS stored in the package data directory"""
     test_sclk = spice_test_data_path / "imap_sclk_0000.tsc"
-    spice.furnsh(str(test_sclk))
+    spiceypy.furnsh(str(test_sclk))
     yield test_sclk
-    spice.kclear()
+    spiceypy.kclear()
 
 
 @pytest.fixture()
@@ -145,7 +149,9 @@ def furnish_kernels(spice_test_data_path):
 
     @contextmanager
     def furnish_kernels(kernels: list[Path]):
-        with spice.KernelPool([str(spice_test_data_path / k) for k in kernels]) as pool:
+        with spiceypy.KernelPool(
+            [str(spice_test_data_path / k) for k in kernels]
+        ) as pool:
             yield pool
 
     return furnish_kernels
@@ -224,7 +230,7 @@ def session_test_metakernel(monkeypatch_session, tmpdir_factory, spice_test_data
     -----
     - This fixture needs to `scope=session` so that the SPICE_METAKERNEL
     environment variable is available for other fixtures that require time
-    conversions using spice.
+    conversions using spiceypy.
     - No furnishing of kernels occur as part of this fixture. This allows other
     fixtures with lesser scope or individual tests to override the environment
     variable as needed. Use the `metakernel_path_not_set` fixture in tests that
@@ -236,7 +242,7 @@ def session_test_metakernel(monkeypatch_session, tmpdir_factory, spice_test_data
     make_metakernel_from_kernels(metakernel_path, kernels_to_load)
     monkeypatch_session.setenv("SPICE_METAKERNEL", str(metakernel_path))
     yield str(metakernel_path)
-    spice.kclear()
+    spiceypy.kclear()
 
 
 @pytest.fixture()
@@ -286,7 +292,7 @@ def use_test_metakernel(
         make_metakernel_from_kernels(metakernel_path, kernels_to_load)
         monkeypatch.setenv("SPICE_METAKERNEL", str(metakernel_path))
         yield str(metakernel_path)
-    spice.kclear()
+    spiceypy.kclear()
 
 
 @pytest.fixture()
@@ -297,19 +303,55 @@ def _unset_metakernel_path(monkeypatch):
 
 
 @pytest.fixture()
-def _set_spin_data_filepath(monkeypatch, tmpdir, generate_spin_data):
-    """Set the SPIN_DATA_FILEPATH environment variable"""
-    # SWE test data time minus 56120 seconds to get mid-night time
-    start_time = 453051323.0 - 56120
-    spin_df = generate_spin_data(start_time)
-    spin_csv_file_path = tmpdir / "spin_data.spin.csv"
-    spin_df.to_csv(spin_csv_file_path, index=False)
-    monkeypatch.setenv("SPIN_DATA_FILEPATH", str(spin_csv_file_path))
+def use_test_spin_data_csv(monkeypatch):
+    """Sets the SPIN_DATA_FILEPATH environment variable to input path."""
+
+    def wrapped_set_spin_data_filepath(path: Path):
+        monkeypatch.setenv("SPIN_DATA_FILEPATH", str(path))
+
+    return wrapped_set_spin_data_filepath
+
+
+@pytest.fixture()
+def use_fake_spin_data_for_time(
+    request, use_test_spin_data_csv, tmpdir, generate_spin_data
+):
+    """
+    Generate and use fake spin data for testing.
+
+    Returns
+    -------
+    callable
+        Returns a callable function that takes start_met and optionally end_met
+        as inputs, generates fake spin data, writes the data to a csv file,
+        and sets the SPIN_DATA_FILEPATH environment variable to point to the
+        fake spin data file.
+    """
+
+    def wrapped_set_spin_data_filepath(
+        start_met: float, end_met: Optional[int] = None
+    ) -> pd.DataFrame:
+        """
+        Generate and use fake spin data for testing.
+        Parameters
+        ----------
+        start_met : int
+            Provides the start time in Mission Elapsed Time (MET).
+        end_met : int
+            Provides the end time in MET. If not provided, default to one day
+            from start time.
+        """
+        spin_df = generate_spin_data(start_met, end_met=end_met)
+        spin_csv_file_path = tmpdir / "spin_data.spin.csv"
+        spin_df.to_csv(spin_csv_file_path, index=False)
+        use_test_spin_data_csv(spin_csv_file_path)
+
+    return wrapped_set_spin_data_filepath
 
 
 @pytest.fixture()
 def generate_spin_data():
-    def make_data(start_met: int, end_met: Optional[int] = None) -> pd.DataFrame:
+    def make_data(start_met: float, end_met: Optional[float] = None) -> pd.DataFrame:
         """
         Generate a spin table CSV covering one or more days.
         Spin table contains the following fields:
@@ -324,14 +366,14 @@ def generate_spin_data():
             thruster_firing
             )
         This function creates spin data using start MET and end MET time.
-        Each spin start data uses the nominal 15 second spin period. The spins that
+        Each spin start data uses the nominal 15-second spin period. The spins that
         occur from 00:00(Mid-night) to 00:10 UTC are marked with flags for
         thruster firing, invalid spin period, and invalid spin phase.
         Parameters
         ----------
-        start_met : int
+        start_met : float
             Provides the start time in Mission Elapsed Time (MET).
-        end_met : int
+        end_met : float
             Provides the end time in MET. If not provided, default to one day
             from start time.
         Returns
@@ -344,7 +386,8 @@ def generate_spin_data():
             end_met = start_met + 86400
 
         # Create spin start second data of 15 seconds increment
-        spin_start_sec = np.arange(start_met, end_met + 1, 15)
+        spin_start_sec = np.arange(np.floor(start_met), end_met + 1, 15)
+        spin_start_subsec = int((start_met - spin_start_sec[0]) * 1000)
 
         nspins = len(spin_start_sec)
 
@@ -352,7 +395,9 @@ def generate_spin_data():
             {
                 "spin_number": np.arange(nspins, dtype=np.uint32),
                 "spin_start_sec": spin_start_sec,
-                "spin_start_subsec": np.zeros(nspins, dtype=np.uint32),
+                "spin_start_subsec": np.full(
+                    nspins, spin_start_subsec, dtype=np.uint32
+                ),
                 "spin_period_sec": np.full(nspins, 15.0, dtype=np.float32),
                 "spin_period_valid": np.ones(nspins, dtype=np.uint8),
                 "spin_phase_valid": np.ones(nspins, dtype=np.uint8),
@@ -362,7 +407,7 @@ def generate_spin_data():
         )
 
         # Convert spin_start_sec to datetime to set repointing times flags
-        spin_start_dates = met_to_j2000ns(spin_start_sec)
+        spin_start_dates = met_to_ttj2000ns(spin_start_sec + spin_start_subsec / 1000)
         spin_start_dates = cdflib.cdfepoch.to_datetime(spin_start_dates)
 
         # Convert DatetimeIndex to Series for using .dt accessor
