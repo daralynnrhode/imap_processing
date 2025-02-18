@@ -91,6 +91,51 @@ def _download_external_kernels(spice_test_data_path):
                     raise
 
 
+@pytest.fixture(scope="session")
+def _download_test_data(test_data_paths):
+    """This fixture downloads externally-located test data files into a specific
+    location. The list of files and their storage locations are specified in
+    the `test_data_paths` parameter, which is a list of tuples; the zeroth
+    element being the source of the test file in the AWS S3 bucket, and the
+    first element being the location in which to store the downloaded file."""
+
+    logger = logging.getLogger(__name__)
+
+    for test_data_path in test_data_paths:
+        source = test_data_path[0]
+        destination = test_data_path[1]
+
+        # Download the test data if necessary and write it to the appropriate
+        # directory
+        if not destination.exists():
+            response = requests.get(source, timeout=60)
+            if response.status_code == 200:
+                with open(destination, "wb") as file:
+                    file.write(response.content)
+                logger.info(f"Downloaded file: {source}")
+            else:
+                logger.error(f"Failed to download file: {response.status_code}")
+        else:
+            logger.info(f"File already exists: {destination}")
+
+
+@pytest.fixture(scope="session")
+def test_data_paths():
+    """Defines a list of test data files to download from the AWS S3 bucket
+    and the corresponding location in which to store the downloaded file"""
+    test_data_path_list = [
+        (
+            "https://api.dev.imap-mission.com/download/test_data/imap_codice_l0_raw_20241110_v001.pkts",
+            imap_module_directory
+            / "tests"
+            / "codice"
+            / "data"
+            / "imap_codice_l0_raw_20241110_v001.pkts",
+        ),
+    ]
+    return test_data_path_list
+
+
 def pytest_collection_modifyitems(items):
     """
     The use of this hook allows modification of test `Items` after tests have
@@ -101,6 +146,7 @@ def pytest_collection_modifyitems(items):
     | pytest mark         | fixture added              |
     +=====================+============================+
     | external_kernel     | _download_external_kernels |
+    | external_test_data  | _download_test_data        |
     | use_test_metakernel | use_test_metakernel        |
     +---------------------+----------------------------+
 
@@ -110,11 +156,16 @@ def pytest_collection_modifyitems(items):
     pytest hook:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_collection_modifyitems
     """
+    markers_to_fixtures = {
+        "external_kernel": "_download_external_kernels",
+        "external_test_data": "_download_test_data",
+        "use_test_metakernel": "use_test_metakernel",
+    }
+
     for item in items:
-        if item.get_closest_marker("external_kernel") is not None:
-            item.fixturenames.append("_download_external_kernels")
-        if item.get_closest_marker("use_test_metakernel") is not None:
-            item.fixturenames.append("use_test_metakernel")
+        for marker, fixture in markers_to_fixtures.items():
+            if item.get_closest_marker(marker) is not None:
+                item.fixturenames.append(fixture)
 
 
 @pytest.fixture(scope="session")

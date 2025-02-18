@@ -121,12 +121,11 @@ def fake_spin_data():
     dataset = xr.Dataset(
         data_vars=dict(
             num_completed=(["epoch"], np.array([0, 0])),
-            acq_start_sec=(["epoch"], np.array([0, 0])),
-            acq_start_subsec=(["epoch"], np.array([0, 0])),
-            acq_end_sec=(["epoch"], np.array([0, 0])),
-            acq_end_subsec=(["epoch"], np.array([0, 0])),
-        ),
-        coords=dict(epoch=(["epoch"], np.array([0, 1]))),
+            acq_start_sec=(["epoch"], np.array([1000000, 2000000])),
+            acq_start_subsec=(["epoch"], np.array([1000000, 2000000])),
+            acq_end_sec=(["epoch"], np.array([2000000, 3000000])),
+            acq_end_subsec=(["epoch"], np.array([2000000, 3000000])),
+        )
     )
     spin_fields = [
         "start_sec_spin",
@@ -302,16 +301,16 @@ def test_validate_parse_events(sample_data, attr_mgr):
     assert dataset["passes"].values == 8
 
 
-def test_organize_spin_data(fake_spin_data):
+def test_organize_spin_data(fake_spin_data, attr_mgr):
     # Arrange
     data_by_epoch_spin = np.arange(0, 56).reshape(2, 28)
     expected_dataset = xr.Dataset(
         data_vars=dict(
             num_completed=(["epoch"], np.array([0, 0])),
-            acq_start_sec=(["epoch"], np.array([0, 0])),
-            acq_start_subsec=(["epoch"], np.array([0, 0])),
-            acq_end_sec=(["epoch"], np.array([0, 0])),
-            acq_end_subsec=(["epoch"], np.array([0, 0])),
+            acq_start_sec=(["epoch"], np.array([1000000, 2000000])),
+            acq_start_subsec=(["epoch"], np.array([1000000, 2000000])),
+            acq_end_sec=(["epoch"], np.array([2000000, 3000000])),
+            acq_end_subsec=(["epoch"], np.array([2000000, 3000000])),
             start_sec_spin=(
                 ["epoch", "spin"],
                 np.array(data_by_epoch_spin),
@@ -341,11 +340,14 @@ def test_organize_spin_data(fake_spin_data):
                 np.array(data_by_epoch_spin),
             ),
         ),
-        coords=dict(epoch=(["epoch"], np.array([0, 1]))),
+        coords=dict(
+            # acq_start + 1e6 * acq_start_subsec converted to J2000 epoch
+            epoch=(["epoch"], np.array([316576067184000000, 317576068184000000]))
+        ),
     )
 
     # Act
-    organized_data = organize_spin_data(fake_spin_data)
+    organized_data = organize_spin_data(fake_spin_data, attr_mgr)
 
     # Assert
     xr.testing.assert_equal(organized_data, expected_dataset)
