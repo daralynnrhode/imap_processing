@@ -14,7 +14,6 @@ from imap_processing.hit.hit_utils import (
     process_housekeeping_data,
 )
 from imap_processing.hit.l1b.constants import (
-    EPOCH_DELTA_NS_BY_DESCRIPTOR,
     FILLVAL_FLOAT32,
     FILLVAL_INT64,
     SECTORS,
@@ -125,19 +124,6 @@ def process_science_data(
     if dataset and logical_source:
         dataset.attrs = attr_mgr.get_global_attributes(logical_source)
 
-        # Add the epoch delta (half the accumulation interval) for this product.
-        # NOTE: EPOCH_DELTA_NS_BY_DESCRIPTOR values are best-effort based on the
-        # cadence implied by the processing code/comments (see constants.py) and
-        # should be confirmed against the algorithm document.
-        dataset["epoch_delta"] = xr.DataArray(
-            np.full(
-                dataset.sizes["epoch"],
-                EPOCH_DELTA_NS_BY_DESCRIPTOR[descriptor],
-                dtype=np.int64,
-            ),
-            dims=["epoch"],
-        )
-
         for field in dataset.data_vars.keys():
             try:
                 # Create a dict of dimensions using the DEPEND_I keys in the attributes
@@ -156,11 +142,6 @@ def process_science_data(
         dataset.epoch.attrs = attr_mgr.get_variable_attributes(
             "epoch", check_schema=False
         )
-        # Point epoch at its delta variable. This is only done here (rather than
-        # in the shared "epoch" yaml entry) so it doesn't leak into the L1B
-        # housekeeping product, which doesn't have an epoch_delta variable.
-        dataset.epoch.attrs["DELTA_MINUS_VAR"] = "epoch_delta"
-        dataset.epoch.attrs["DELTA_PLUS_VAR"] = "epoch_delta"
         logger.info(f"HIT L1B dataset created for {logical_source}")
 
     return dataset
@@ -381,13 +362,13 @@ def process_summed_rates_data(
         )
 
     # NOTE: issue #2013 (renaming these particle variables, e.g. "h" ->
-    # "h_summed_count_rates") is NOT implemented here. The L1B "h",
-    # "h_stat_uncert_plus", etc. variable names are relied on directly by
-    # HIT L2 processing (imap_processing/hit/l2/hit_l2.py and l2/constants.py's
-    # VALID_SPECIES / VALID_SECTORED_SPECIES lists), so renaming them here
-    # would also require updating L2 in the same change. That's out of scope
-    # for this L1B CDF-attributes ticket -- see the CDF config comment above
-    # each shared particle variable for how the resulting CDF-attribute name
+    # "h_summed_count_rates") was closed as not needed and is NOT implemented
+    # here. The L1B "h", "h_stat_uncert_plus", etc. variable names are relied
+    # on directly by HIT L2 processing (imap_processing/hit/l2/hit_l2.py and
+    # l2/constants.py's VALID_SPECIES / VALID_SECTORED_SPECIES lists), so
+    # renaming them would also require updating L2 in the same change --
+    # see the CDF config comment above each shared particle variable for how
+    # the resulting CDF-attribute name
     # collision (between summed- and sectored-rates, which need different
     # DEPEND attributes) is handled without a rename.
     return l1b_summed_rates_dataset
@@ -472,9 +453,9 @@ def process_sectored_rates_data(
         if "sectored_counts" in var:
             # Determine the new variable name for the L1B dataset
             # NOTE: issue #2013 (renaming these variables, e.g.
-            # "h_sectored_counts" -> "h_sectored_count_rates") is NOT
-            # implemented here -- see the matching NOTE in
-            # process_summed_rates_data for why (HIT L2 depends on these
+            # "h_sectored_counts" -> "h_sectored_count_rates") was closed as
+            # not needed and is NOT implemented here -- see the matching NOTE
+            # in process_summed_rates_data for why (HIT L2 depends on these
             # bare names).
             if "_sectored_counts" in var:
                 new_var = var.replace("_sectored_counts", "")
