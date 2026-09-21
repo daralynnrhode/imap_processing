@@ -13,6 +13,25 @@ SECTORS = 15
 FILLVAL_FLOAT32 = -1.00e31
 FILLVAL_INT64 = -9223372036854775808
 
+# Epoch delta (half the accumulation/integration interval, in nanoseconds) for
+# each L1B science descriptor. epoch is assumed to represent the center of the
+# accumulation period, per the convention documented in imap_constant_attrs.yaml.
+#
+# standard-rates and summed-rates are derived from L1A counts reported once per
+# science frame (1 minute cadence), so half of that interval is used.
+# sectored-rates accumulates over 10 science frames (10 minutes; see
+# process_sectored_rates_data), so half of that interval is used.
+#
+# NOTE: These are best-effort values inferred from the cadence implied by the
+# processing code and comments here, not read out of the algorithm document.
+# TODO: Confirm with Andriy / the algorithm document before merging.
+_NS_PER_SECOND = 1_000_000_000
+EPOCH_DELTA_NS_BY_DESCRIPTOR = {
+    "standard-rates": 30 * _NS_PER_SECOND,  # half of 1 minute
+    "summed-rates": 30 * _NS_PER_SECOND,  # half of 1 minute
+    "sectored-rates": 5 * 60 * _NS_PER_SECOND,  # half of 10 minutes
+}
+
 # For the L1B summed rates product, counts are summed by particle type,
 # energy range, and detector penetration range (Range 2, Range 3, and Range 4).
 # See section 6.2 of the algorithm document for more details.
