@@ -380,6 +380,16 @@ def process_summed_rates_data(
             l1b_summed_rates_dataset, particle, livetime
         )
 
+    # NOTE: issue #2013 (renaming these particle variables, e.g. "h" ->
+    # "h_summed_count_rates") is NOT implemented here. The L1B "h",
+    # "h_stat_uncert_plus", etc. variable names are relied on directly by
+    # HIT L2 processing (imap_processing/hit/l2/hit_l2.py and l2/constants.py's
+    # VALID_SPECIES / VALID_SECTORED_SPECIES lists), so renaming them here
+    # would also require updating L2 in the same change. That's out of scope
+    # for this L1B CDF-attributes ticket -- see the CDF config comment above
+    # each shared particle variable for how the resulting CDF-attribute name
+    # collision (between summed- and sectored-rates, which need different
+    # DEPEND attributes) is handled without a rename.
     return l1b_summed_rates_dataset
 
 
@@ -461,6 +471,11 @@ def process_sectored_rates_data(
     for var in data_vars:
         if "sectored_counts" in var:
             # Determine the new variable name for the L1B dataset
+            # NOTE: issue #2013 (renaming these variables, e.g.
+            # "h_sectored_counts" -> "h_sectored_count_rates") is NOT
+            # implemented here -- see the matching NOTE in
+            # process_summed_rates_data for why (HIT L2 depends on these
+            # bare names).
             if "_sectored_counts" in var:
                 new_var = var.replace("_sectored_counts", "")
             else:
