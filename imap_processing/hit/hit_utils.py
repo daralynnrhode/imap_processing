@@ -390,6 +390,20 @@ def add_energy_variables(
     ).astype(np.float32)
 
     def _attrs(var_name: str) -> dict:
+        """
+        Look up CDF attributes for a variable, or return empty if unset.
+
+        Parameters
+        ----------
+        var_name : str
+            The variable name to look up in the attribute manager.
+
+        Returns
+        -------
+        dict
+            The variable's CDF attributes, or an empty dict if `attr_mgr`
+            was not provided.
+        """
         if attr_mgr is None:
             return {}
         return attr_mgr.get_variable_attributes(var_name, check_schema=False)
